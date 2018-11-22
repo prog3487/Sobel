@@ -4,10 +4,12 @@
 
 #include "pch.h"
 #include "Game.h"
+#include "d3dUtil.h"
 
 extern void ExitGame();
 
 using namespace DirectX;
+using namespace DirectX::SimpleMath;
 
 using Microsoft::WRL::ComPtr;
 
@@ -34,6 +36,14 @@ void Game::Initialize(HWND window, int width, int height)
     m_timer.SetFixedTimeStep(true);
     m_timer.SetTargetElapsedSeconds(1.0 / 60);
     */
+
+
+	m_obj1_world = Matrix::Identity;
+	m_obj2_world = Matrix::Identity;
+	m_obj3_world = Matrix::Identity;
+
+	m_obj1_world.Translation(Vector3(-2, 1, -1));
+	m_obj2_world.Translation(Vector3(2, -1,  1));
 }
 
 #pragma region Frame Update
@@ -73,8 +83,57 @@ void Game::Render()
     m_deviceResources->PIXBeginEvent(L"Render");
     auto context = m_deviceResources->GetD3DDeviceContext();
 
-    // TODO: Add your rendering code here.
-    context;
+	m_obj1->Draw(m_obj1_world, m_view, m_proj, Colors::AliceBlue);
+	m_obj2->Draw(m_obj2_world, m_view, m_proj, Colors::Crimson);
+	m_obj3->Draw(m_obj3_world, m_view, m_proj, Colors::CadetBlue);
+
+	// unbound resources & set swap chain render target
+	auto rt = m_deviceResources->GetRenderTargetView();
+	context->OMSetRenderTargets(1, &rt, nullptr);
+
+	// post process
+	
+	{	// sobel
+		{	// Detect edge
+			context->CSSetShader(m_sobel_cs.Get(), nullptr, 0);
+			context->CSSetShaderResources(0, 1, m_RT_SRV.GetAddressOf());
+			context->CSSetUnorderedAccessViews(0, 1, m_sobel_edge_uav.GetAddressOf(), nullptr);
+
+			UINT tGroupX = UINT(ceil(float(m_deviceResources->GetOutputSize().right) / 16.0f));
+			UINT tGroupY = UINT(ceil(float(m_deviceResources->GetOutputSize().bottom) / 16.0f));
+			context->Dispatch(tGroupX, tGroupY, 1);
+
+			// unbound resources
+			ID3D11ShaderResourceView* null_srvs[] = { nullptr };
+			context->CSSetShaderResources(0, _countof(null_srvs), null_srvs);
+
+			ID3D11UnorderedAccessView* nullUAV = nullptr;
+			context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+
+			context->CSSetShader(nullptr, nullptr, 0);
+		}
+		
+		{	// Draw edge
+			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+			context->VSSetShader(m_sobel_vs.Get(), nullptr, 0);
+			context->PSSetShader(m_sobel_ps.Get(), nullptr, 0);
+
+			ID3D11ShaderResourceView* srvs[] = { m_RT_SRV.Get(), m_sobel_edge_srv.Get() };
+			context->PSSetShaderResources(0, _countof(srvs), srvs);
+			
+			auto sampler = m_states->PointClamp();
+			context->PSSetSamplers(0, 1, &sampler);
+			
+			context->Draw(6, 0);
+
+			// unbound resources
+			ID3D11ShaderResourceView* null_srvs[] = { nullptr, nullptr };
+			context->PSSetShaderResources(0, _countof(null_srvs), null_srvs);
+			context->PSSetShader(nullptr, nullptr, 0);
+			context->VSSetShader(nullptr, nullptr, 0);
+		}
+	}
 
     m_deviceResources->PIXEndEvent();
 
@@ -89,12 +148,11 @@ void Game::Clear()
 
     // Clear the views.
     auto context = m_deviceResources->GetD3DDeviceContext();
-    auto renderTarget = m_deviceResources->GetRenderTargetView();
     auto depthStencil = m_deviceResources->GetDepthStencilView();
 
-    context->ClearRenderTargetView(renderTarget, Colors::CornflowerBlue);
+	context->ClearRenderTargetView(m_RTV.Get(), Colors::CornflowerBlue);
     context->ClearDepthStencilView(depthStencil, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
-    context->OMSetRenderTargets(1, &renderTarget, depthStencil);
+	context->OMSetRenderTargets(1, m_RTV.GetAddressOf(), depthStencil);
 
     // Set the viewport.
     auto viewport = m_deviceResources->GetScreenViewport();
@@ -157,16 +215,80 @@ void Game::GetDefaultSize(int& width, int& height) const
 // These are the resources that depend on the device.
 void Game::CreateDeviceDependentResources()
 {
-    auto device = m_deviceResources->GetD3DDevice();
+	auto device = m_deviceResources->GetD3DDevice();
+	auto context = m_deviceResources->GetD3DDeviceContext();
 
-    // TODO: Initialize device dependent objects here (independent of window size).
-    device;
+	m_states = std::make_unique<DirectX::CommonStates>(device);
+
+	{	// shaders
+		auto vs = d3dUtil::CompileShader(L"Composite.hlsl", nullptr, "VS", "vs_5_0");
+		DX::ThrowIfFailed(
+			device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, m_sobel_vs.ReleaseAndGetAddressOf()));
+
+		auto ps = d3dUtil::CompileShader(L"Composite.hlsl", nullptr, "PS", "ps_5_0");
+		DX::ThrowIfFailed(
+			device->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, m_sobel_ps.ReleaseAndGetAddressOf()));
+
+		auto cs = d3dUtil::CompileShader(L"FindOutline.hlsl", nullptr, "CS", "cs_5_0");
+		DX::ThrowIfFailed(
+			device->CreateComputeShader(cs->GetBufferPointer(), cs->GetBufferSize(), nullptr, m_sobel_cs.ReleaseAndGetAddressOf()));
+	}
+
+	m_obj1 = GeometricPrimitive::CreateTeapot(context, 4.0f);
+	m_obj2 = GeometricPrimitive::CreateCone(context, 5.0f, 3.0f);
+	m_obj3 = GeometricPrimitive::CreateTetrahedron(context, 3);
 }
 
 // Allocate all memory resources that change on a window SizeChanged event.
 void Game::CreateWindowSizeDependentResources()
 {
-    // TODO: Initialize windows-size dependent objects here.
+	auto width = m_deviceResources->GetOutputSize().right;
+	auto height = m_deviceResources->GetOutputSize().bottom;
+	auto device = m_deviceResources->GetD3DDevice();
+
+	
+	{	// render scene render target & use as shader input
+		CD3D11_TEXTURE2D_DESC desc(
+			m_deviceResources->GetBackBufferFormat(),
+			width, height,
+			1, 1, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE
+		);
+
+		DX::ThrowIfFailed(
+			device->CreateTexture2D(&desc, nullptr, m_buffer_RT.ReleaseAndGetAddressOf()));
+
+		// RTV
+		DX::ThrowIfFailed(
+			device->CreateRenderTargetView(m_buffer_RT.Get(), nullptr, m_RTV.ReleaseAndGetAddressOf()));
+
+		// SRV
+		DX::ThrowIfFailed(
+			device->CreateShaderResourceView(m_buffer_RT.Get(), nullptr, m_RT_SRV.ReleaseAndGetAddressOf()));
+	}
+	
+	{	// sobel edge texture resource
+		CD3D11_TEXTURE2D_DESC desc(
+			DXGI_FORMAT_R16G16B16A16_FLOAT,
+			width, height, 1, 1, 
+			D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS);
+
+		DX::ThrowIfFailed(
+			device->CreateTexture2D(&desc, nullptr, m_sobel_edge.ReleaseAndGetAddressOf()));
+	}
+
+	{	// Edge UAV (detect edge & save)
+		DX::ThrowIfFailed(		// Unordered Access View can be created with null description.
+			device->CreateUnorderedAccessView(m_sobel_edge.Get(), nullptr, m_sobel_edge_uav.ReleaseAndGetAddressOf()));
+	}
+
+	{	// Edge SRV (use edge as shader input)
+		DX::ThrowIfFailed(
+			device->CreateShaderResourceView(m_sobel_edge.Get(), nullptr, m_sobel_edge_srv.ReleaseAndGetAddressOf()));
+	}
+
+	m_proj = Matrix::CreatePerspectiveFieldOfView(XM_PIDIV4, float(width) / float(height), 0.01f, 1000.f);
+	m_view = Matrix::CreateLookAt(Vector3(0, 10, 10), Vector3::Zero, Vector3::UnitY);
+
 }
 
 void Game::OnDeviceLost()
