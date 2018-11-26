@@ -4,3 +4,4 @@ Sobel edge detection using ComputeShader (DirectCompute)
 - Rotate camera using mouse with RButton
 - Find edges by color difference & multiply its inverse with original scene color.
 - ![Image](https://prog3487.github.io/Sobel/sobel.png)
+- Need [DirectXTK](https://github.com/Microsoft/DirectXTK) at $(SolutionDir)/../DirectXTK
