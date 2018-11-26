@@ -24,6 +24,9 @@ void Game::Initialize(HWND window, int width, int height)
 {
     m_deviceResources->SetWindow(window, width, height);
 
+	m_Camera = std::make_unique<Bruce::Camera>();
+	m_Camera->CreateView(Vector3(0, 10, 10), Vector3::Zero, Vector3::UnitY);
+
     m_deviceResources->CreateDeviceResources();
     CreateDeviceDependentResources();
 
@@ -37,6 +40,9 @@ void Game::Initialize(HWND window, int width, int height)
     m_timer.SetTargetElapsedSeconds(1.0 / 60);
     */
 
+	m_keyboard = std::make_unique<DirectX::Keyboard>();
+	m_mouse = std::make_unique<DirectX::Mouse>();
+	m_mouse->SetWindow(window);
 
 	m_obj1_world = Matrix::Identity;
 	m_obj2_world = Matrix::Identity;
@@ -58,13 +64,58 @@ void Game::Tick()
     Render();
 }
 
+static const float CAMERA_MOVE_SPEED = 10.0f;
+static const float CAMERA_ROTATE_SPEED = 0.25f;
+
 // Updates the world.
 void Game::Update(DX::StepTimer const& timer)
 {
-    float elapsedTime = float(timer.GetElapsedSeconds());
+	float elapsedTime = float(timer.GetElapsedSeconds());
 
-    // TODO: Add your game logic here.
-    elapsedTime;
+	{	// keyboard
+		auto kb = m_keyboard->GetState();
+		float moveDelta = CAMERA_MOVE_SPEED * elapsedTime;
+		if (kb.W)
+		{
+			m_Camera->Walk( moveDelta);
+		}
+		if (kb.S) 
+		{
+			m_Camera->Walk(-moveDelta);
+		}
+		if (kb.A) 
+		{
+			m_Camera->Strafe(-moveDelta);
+		}
+		if (kb.D) 
+		{
+			m_Camera->Strafe( moveDelta);
+		}
+		if (kb.Q)
+		{
+			m_Camera->Fly(moveDelta);
+		}
+		if (kb.E)
+		{
+			m_Camera->Fly(-moveDelta);
+		}
+	}
+
+	{	// mouse
+		auto mouse = m_mouse->GetState();
+		if (mouse.positionMode == Mouse::MODE_RELATIVE)
+		{
+			Vector3 delta = Vector3(float(mouse.x), float(mouse.y), 0.f) * CAMERA_ROTATE_SPEED;
+			Vector3 deltaRadian(XMConvertToRadians(delta.x), XMConvertToRadians(delta.y), 0);
+
+			m_Camera->Pitch(-deltaRadian.y);
+			m_Camera->RotateY(-deltaRadian.x);
+		}
+
+		m_mouse->SetMode(mouse.rightButton ? Mouse::MODE_RELATIVE : Mouse::MODE_ABSOLUTE);
+	}
+	
+	m_Camera->UpdateViewMatrix();
 }
 #pragma endregion
 
@@ -83,9 +134,9 @@ void Game::Render()
     m_deviceResources->PIXBeginEvent(L"Render");
     auto context = m_deviceResources->GetD3DDeviceContext();
 
-	m_obj1->Draw(m_obj1_world, m_view, m_proj, Colors::AliceBlue);
-	m_obj2->Draw(m_obj2_world, m_view, m_proj, Colors::Crimson);
-	m_obj3->Draw(m_obj3_world, m_view, m_proj, Colors::CadetBlue);
+	m_obj1->Draw(m_obj1_world, m_Camera->GetView(), m_Camera->GetProj(), Colors::AliceBlue);
+	m_obj2->Draw(m_obj2_world, m_Camera->GetView(), m_Camera->GetProj(), Colors::Crimson);
+	m_obj3->Draw(m_obj3_world, m_Camera->GetView(), m_Camera->GetProj(), Colors::CadetBlue);
 
 	// unbound resources & set swap chain render target
 	auto rt = m_deviceResources->GetRenderTargetView();
@@ -286,14 +337,27 @@ void Game::CreateWindowSizeDependentResources()
 			device->CreateShaderResourceView(m_sobel_edge.Get(), nullptr, m_sobel_edge_srv.ReleaseAndGetAddressOf()));
 	}
 
-	m_proj = Matrix::CreatePerspectiveFieldOfView(XM_PIDIV4, float(width) / float(height), 0.01f, 1000.f);
-	m_view = Matrix::CreateLookAt(Vector3(0, 10, 10), Vector3::Zero, Vector3::UnitY);
-
+	m_Camera->CreateProj(XM_PIDIV4, float(width) / float(height), 0.01f, 1000.0f);
 }
 
 void Game::OnDeviceLost()
 {
-    // TODO: Add Direct3D resource cleanup here.
+	m_states.reset();
+	m_obj1.reset();
+	m_obj2.reset();
+	m_obj3.reset();
+
+	m_sobel_vs.Reset();
+	m_sobel_ps.Reset();
+	m_sobel_cs.Reset();
+
+	m_buffer_RT.Reset();
+	m_RTV.Reset();
+	m_RT_SRV.Reset();
+
+	m_sobel_edge.Reset();
+	m_sobel_edge_uav.Reset();
+	m_sobel_edge_srv.Reset();
 }
 
 void Game::OnDeviceRestored()

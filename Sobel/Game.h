@@ -9,6 +9,9 @@
 #include "GeometricPrimitive.h"
 #include "SimpleMath.h"
 #include "CommonStates.h"
+#include "Camera.h"
+#include "Keyboard.h"
+#include "Mouse.h"
 
 // A basic game implementation that creates a D3D11 device and
 // provides a game loop.
@@ -55,11 +58,13 @@ private:
     // Rendering loop timer.
     DX::StepTimer                           m_timer;
 
-	//
-	std::unique_ptr<DirectX::CommonStates> m_states;
 
-	DirectX::SimpleMath::Matrix m_view;
-	DirectX::SimpleMath::Matrix m_proj;
+	//
+	std::unique_ptr<DirectX::Keyboard> m_keyboard;
+	std::unique_ptr<DirectX::Mouse> m_mouse;
+
+	std::unique_ptr<Bruce::Camera> m_Camera;
+	std::unique_ptr<DirectX::CommonStates> m_states;
 
 	// 
 	std::unique_ptr<DirectX::GeometricPrimitive> m_obj1;
